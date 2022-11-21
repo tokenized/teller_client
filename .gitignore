@@ -1,0 +1,8 @@
+
+*.exe
+*.test
+*.prof
+*.log
+tmp*
+config/*.env
+!config/example.env
