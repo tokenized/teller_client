@@ -26,7 +26,13 @@ This will output a new randomized WIF key. You can also create a WIF key using y
 
 ## Send some bitcoin to that key
 
-Send some bitcoin, using any wallet, to the P2PKH `Address` output for the entity contract administrator key. Then get the outpoint for that UTXO (txid and output index), and the satoshi value in that UTXO.
+Send some bitcoin, using any wallet, to the P2PKH `Address` output for the entity contract administrator key.
+
+Then get the outpoint for that UTXO (txid and output index), and the satoshi value in that UTXO. These values will be needed for the "Create and entity ContractOffer transaction" step below.
+
+You can use WhatsOnChain or any block explorer to look up the transaction that funded your admin key. The outpoint is the hash of the transaction (txid) and the index of the output paying to the admin key. The index is zero based so the first output is zero. Combine these two values "txid:index" to use as `<outpoint>`.
+
+The satoshi value of that output will be used as `<outpoint_value>` below. It is in satoshis (an integer value), which is 1/100,000,000th of a bitcoin. Meaning 1e-8 bitcoins equals 1 satoshi, or 1 bitcoin == 100,000,000 satoshis.
 
 ## Create a JSON file containing a `ContractOffer`
 
