@@ -17,10 +17,13 @@ import (
 var cmdCreateInstrument = &cobra.Command{
 	Use:   "create instrument_type currency_code precision use_identity_oracle enforcement_orders_permitted",
 	Short: "Send a request to create a new instrument.",
-	Args:  cobra.MinimumNArgs(3),
+	Args:  cobra.RangeArgs(3, 5),
 	RunE: func(c *cobra.Command, args []string) error {
 
 		instrumentType := args[0]
+		if instruments.NewInstrumentFromCode(instrumentType) == nil {
+			return fmt.Errorf("Invalid instrument type : %s", instrumentType)
+		}
 
 		currencyCode := args[1]
 		currencyData := instruments.CurrenciesData(currencyCode)
@@ -33,7 +36,8 @@ var cmdCreateInstrument = &cobra.Command{
 			return errors.Wrap(err, "precision")
 		}
 		if precision < 2 || precision > 6 {
-			return fmt.Errorf("Precision out of range (2 is cents, 6 is 1/10000 of cents): %d", precision)
+			return fmt.Errorf("Precision out of range (2 is cents, 6 is 1/10000 of cents): %d",
+				precision)
 		}
 
 		useIdentityOracle := false
