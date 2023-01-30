@@ -80,7 +80,7 @@ func (*Protocol) ProtocolID() envelope.ProtocolID {
 	return ProtocolID
 }
 
-func (*Protocol) Parse(payload envelope.Data) (channels.Message, error) {
+func (*Protocol) Parse(payload envelope.Data) (channels.Message, envelope.Data, error) {
 	return Parse(payload)
 }
 
@@ -355,47 +355,49 @@ func (m *BitcoinReclaimed) Write() (envelope.Data, error) {
 	return envelope.Data{envelope.ProtocolIDs{ProtocolID}, payload}, nil
 }
 
-func Parse(payload envelope.Data) (channels.Message, error) {
+func Parse(payload envelope.Data) (channels.Message, envelope.Data, error) {
 	if len(payload.ProtocolIDs) == 0 {
-		return nil, nil
+		return nil, payload, nil
 	}
 
 	if !bytes.Equal(payload.ProtocolIDs[0], ProtocolID) {
-		return nil, nil
+		return nil, payload, nil
 	}
 
 	if len(payload.ProtocolIDs) != 1 {
-		return nil, errors.Wrapf(channels.ErrInvalidMessage, "teller messages can't wrap")
+		return nil, payload, errors.Wrapf(channels.ErrInvalidMessage, "teller messages can't wrap")
 	}
 
 	if len(payload.Payload) == 0 {
-		return nil, errors.Wrapf(channels.ErrInvalidMessage, "payload empty")
+		return nil, payload, errors.Wrapf(channels.ErrInvalidMessage, "payload empty")
 	}
 
 	version, err := bitcoin.ScriptNumberValue(payload.Payload[0])
 	if err != nil {
-		return nil, errors.Wrap(err, "version")
+		return nil, payload, errors.Wrap(err, "version")
 	}
 	if version != 0 {
-		return nil, errors.Wrap(channels.ErrUnsupportedVersion, fmt.Sprintf("teller %d", version))
+		return nil, payload, errors.Wrap(channels.ErrUnsupportedVersion, fmt.Sprintf("teller %d", version))
 	}
 
 	messageType, err := bitcoin.ScriptNumberValue(payload.Payload[1])
 	if err != nil {
-		return nil, errors.Wrap(err, "message type")
+		return nil, payload, errors.Wrap(err, "message type")
 	}
 
 	result := MessageForType(MessageType(messageType))
 	if result == nil {
-		return nil, errors.Wrap(channels.ErrNotSupported,
+		return nil, payload, errors.Wrap(channels.ErrNotSupported,
 			fmt.Sprintf("%d", MessageType(messageType)))
 	}
 
-	if _, err := bsor.Unmarshal(payload.Payload[2:], result); err != nil {
-		return nil, errors.Wrap(err, "unmarshal")
+	payloads, err := bsor.Unmarshal(payload.Payload[2:], result)
+	if err != nil {
+		return nil, payload, errors.Wrap(err, "unmarshal")
 	}
+	payload.Payload = payloads
 
-	return result, nil
+	return result, payload, nil
 }
 
 func MessageForType(messageType MessageType) channels.Message {

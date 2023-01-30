@@ -14,5 +14,6 @@ func Execute() {
 	scCmd.AddCommand(cmdSendTokens)
 	scCmd.AddCommand(cmdReceiveTokens)
 	scCmd.AddCommand(cmdReclaimBitcoin)
+	scCmd.AddCommand(cmdListen)
 	scCmd.Execute()
 }

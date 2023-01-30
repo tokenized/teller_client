@@ -6,3 +6,4 @@
 tmp*
 config/*.env
 !config/example.env
+*.txt

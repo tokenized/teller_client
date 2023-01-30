@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/tokenized/channels"
@@ -42,34 +44,24 @@ func ProcessRequest(ctx context.Context, requestID uuid.UUID, msg channels.Write
 		return errors.Wrap(err, "teller key")
 	}
 
-	tellerPeerChannel, err := peer_channels.NewPeerChannelFromString(os.Getenv("TELLER_PEER_CHANNEL"))
+	tellerPeerChannel, err := peer_channels.ParseChannel(os.Getenv("TELLER_PEER_CHANNEL"))
 	if err != nil {
 		return errors.Wrap(err, "teller peer channel")
 	}
 
-	tellerBaseURL, tellerPeerChannelID, err := peer_channels.ParseChannelURL(tellerPeerChannel.URL)
-	if err != nil {
-		return errors.Wrap(err, "parse teller peer channel")
-	}
-
-	tellerClient, err := peerChannelsFactory.NewClient(tellerBaseURL)
+	tellerClient, err := peerChannelsFactory.NewClient(tellerPeerChannel.BaseURL)
 	if err != nil {
 		return errors.Wrap(err, "teller peer channel client")
 	}
 
-	responsePeerChannel, err := peer_channels.NewPeerChannelFromString(os.Getenv("RESPONSE_PEER_CHANNEL"))
+	responsePeerChannel, err := peer_channels.ParseChannel(os.Getenv("RESPONSE_PEER_CHANNEL"))
 	if err != nil {
 		return errors.Wrap(err, "teller peer channel")
 	}
 
-	responseBaseURL, _, err := peer_channels.ParseChannelURL(responsePeerChannel.URL)
-	if err != nil {
-		return errors.Wrap(err, "response peer channel url")
-	}
-
 	responseReadToken, err := uuid.Parse(os.Getenv("RESPONSE_READ_TOKEN"))
 
-	responseClient, err := peerChannelsFactory.NewClient(responseBaseURL)
+	responseClient, err := peerChannelsFactory.NewClient(responsePeerChannel.BaseURL)
 	if err != nil {
 		return errors.Wrap(err, "response peer channel client")
 	}
@@ -83,7 +75,7 @@ func ProcessRequest(ctx context.Context, requestID uuid.UUID, msg channels.Write
 		return errors.Wrap(err, "wrap message")
 	}
 
-	if err := tellerClient.WriteMessage(ctx, tellerPeerChannelID, tellerPeerChannel.Token,
+	if err := tellerClient.WriteMessage(ctx, tellerPeerChannel.ChannelID, tellerPeerChannel.Token,
 		peer_channels.ContentTypeBinary, bytes.NewReader(msgScript)); err != nil {
 		return errors.Wrap(err, "post message")
 	}
@@ -124,6 +116,7 @@ func ProcessRequest(ctx context.Context, requestID uuid.UUID, msg channels.Write
 					responseReadToken.String(), msg.Sequence, true, true); err != nil {
 					logger.Error(ctx, "Failed to mark message as read : %s", err)
 				}
+				handleErr = nil
 			}
 
 		case listenErr := <-listenComplete:
@@ -132,6 +125,90 @@ func ProcessRequest(ctx context.Context, requestID uuid.UUID, msg channels.Write
 
 		case <-time.After(time.Second * 10):
 			timeout = errors.New("Timed out")
+			done = true
+		}
+	}
+
+	listenThread.Stop(ctx)
+	wait.Wait()
+
+	combinedErr := threads.CombineErrors(listenThread.Error(), handleErr, timeout)
+	if errors.Cause(combinedErr) != threads.Interrupted {
+		return combinedErr
+	}
+
+	return nil
+}
+
+func Listen(ctx context.Context, requestID uuid.UUID) error {
+	peerChannelsFactory := peer_channels.NewFactory()
+
+	tellerKey, err := bitcoin.PublicKeyFromStr(os.Getenv("TELLER_KEY"))
+	if err != nil {
+		return errors.Wrap(err, "teller key")
+	}
+
+	responsePeerChannel, err := peer_channels.ParseChannel(os.Getenv("RESPONSE_PEER_CHANNEL"))
+	if err != nil {
+		return errors.Wrap(err, "teller peer channel")
+	}
+
+	responseReadToken, err := uuid.Parse(os.Getenv("RESPONSE_READ_TOKEN"))
+
+	responseClient, err := peerChannelsFactory.NewClient(responsePeerChannel.BaseURL)
+	if err != nil {
+		return errors.Wrap(err, "response peer channel client")
+	}
+
+	var wait sync.WaitGroup
+
+	incoming := make(chan peer_channels.Message, 10)
+	listenThread, listenComplete := threads.NewInterruptableThreadComplete("Listen Peer Channel",
+		func(ctx context.Context, interrupt <-chan interface{}) error {
+			return responseClient.Listen(ctx, responseReadToken.String(), true, incoming, interrupt)
+		}, &wait)
+
+	osSignals := make(chan os.Signal, 1)
+	signal.Notify(osSignals, os.Interrupt, syscall.SIGTERM)
+
+	listenThread.Start(ctx)
+
+	var handleErr error
+	var timeout error
+	done := false
+	for !done {
+		select {
+		case msg := <-incoming:
+			handleErr = handleMessage(ctx, tellerKey, requestID, msg)
+			if handleErr != nil {
+				if errors.Cause(handleErr) == ErrFailure {
+					logger.Error(ctx, handleErr.Error())
+					done = true
+				}
+			} else {
+				logger.Info(ctx, "Handled message")
+				done = true
+			}
+
+			if handleErr == nil || errors.Cause(handleErr) == ErrWrongMessageID ||
+				errors.Cause(handleErr) == ErrFailure {
+				if err := responseClient.MarkMessages(ctx, msg.ChannelID,
+					responseReadToken.String(), msg.Sequence, true, true); err != nil {
+					logger.Error(ctx, "Failed to mark message as read : %s", err)
+				}
+				handleErr = nil
+			}
+
+		case listenErr := <-listenComplete:
+			logger.Error(ctx, "Listen completed : %s", listenErr)
+			done = true
+
+		case <-time.After(time.Minute * 10):
+			timeout = errors.New("Timed out")
+			done = true
+
+		case <-osSignals:
+			logger.Info(ctx, "Start shutdown...")
 			done = true
 		}
 	}
@@ -182,13 +259,13 @@ func handleMessage(ctx context.Context, tellerKey bitcoin.PublicKey, requestID u
 		}
 	}
 
-	if err := wMsg.Signature.Verify(); err != nil {
-		return err
-	}
-
 	if wMsg.Response != nil {
 		js, _ := json.MarshalIndent(wMsg.Response, "", "  ")
 		fmt.Printf("Response : %s\n", js)
+	}
+
+	if err := wMsg.Signature.Verify(); err != nil {
+		return err
 	}
 
 	if wMsg.Message != nil {
@@ -247,13 +324,6 @@ func handleMessage(ctx context.Context, tellerKey bitcoin.PublicKey, requestID u
 		if wMsg.Response == nil {
 			return errors.New("No Payload and No Response")
 		}
-
-		// Check response code
-		if wMsg.Response.Status == channels.StatusOK {
-			return nil
-		}
-
-		return errors.Wrapf(ErrFailure, "Response Status: %s", wMsg.Response.Status)
 	}
 
 	return nil
@@ -306,10 +376,13 @@ func unwrapMessage(protocols *channels.Protocols, script []byte) (*WrappedMessag
 		return nil, errors.Wrap(err, "sign")
 	}
 
-	result.ID, payload, err = channels.ParseUUID(payload)
+	var channelsUUID *channels.UUID
+	channelsUUID, payload, err = channels.ParseUUID(payload)
 	if err != nil {
 		return nil, errors.Wrap(err, "uuid")
 	}
+	uuidValue := uuid.UUID(*channelsUUID)
+	result.ID = &uuidValue
 
 	result.Response, payload, err = channels.ParseResponse(payload)
 	if err != nil {
@@ -329,7 +402,7 @@ func unwrapMessage(protocols *channels.Protocols, script []byte) (*WrappedMessag
 		return nil, errors.Wrap(channels.ErrUnsupportedProtocol, payload.ProtocolIDs[0].String())
 	}
 
-	msg, err := protocol.Parse(payload)
+	msg, _, err := protocol.Parse(payload)
 	if err != nil {
 		return nil, errors.Wrap(err, "parse")
 	}
