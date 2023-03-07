@@ -13,7 +13,6 @@ import (
 
 	"github.com/tokenized/channels"
 	channelsExpandedTx "github.com/tokenized/channels/expanded_tx"
-	channelsWallet "github.com/tokenized/channels/wallet"
 	envelopeV1 "github.com/tokenized/envelope/pkg/golang/envelope/v1"
 	"github.com/tokenized/logger"
 	"github.com/tokenized/pkg/bitcoin"
@@ -70,7 +69,7 @@ func ProcessRequest(ctx context.Context, requestID uuid.UUID, msg channels.Write
 		PeerChannel: responsePeerChannel,
 	}
 
-	msgScript, err := wrapMessage(msg, key, channelsWallet.RandomHash(), replyTo, requestID)
+	msgScript, err := wrapMessage(msg, key, channels.RandomHash(), replyTo, requestID)
 	if err != nil {
 		return errors.Wrap(err, "wrap message")
 	}
