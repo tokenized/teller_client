@@ -87,7 +87,8 @@ func ProcessRequest(ctx context.Context, requestID uuid.UUID, msg channels.Write
 	incoming := make(chan peer_channels.Message, 10)
 	listenThread, listenComplete := threads.NewInterruptableThreadComplete("Listen Peer Channel",
 		func(ctx context.Context, interrupt <-chan interface{}) error {
-			return responseClient.Listen(ctx, responseReadToken.String(), true, incoming, interrupt)
+			return responseClient.Listen(ctx, responseReadToken.String(), true, time.Second,
+				incoming, interrupt)
 		}, &wait)
 
 	listenThread.Start(ctx)
@@ -164,7 +165,8 @@ func Listen(ctx context.Context, requestID uuid.UUID) error {
 	incoming := make(chan peer_channels.Message, 10)
 	listenThread, listenComplete := threads.NewInterruptableThreadComplete("Listen Peer Channel",
 		func(ctx context.Context, interrupt <-chan interface{}) error {
-			return responseClient.Listen(ctx, responseReadToken.String(), true, incoming, interrupt)
+			return responseClient.Listen(ctx, responseReadToken.String(), true, time.Second,
+				incoming, interrupt)
 		}, &wait)
 
 	osSignals := make(chan os.Signal, 1)
